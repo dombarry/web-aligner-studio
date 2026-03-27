@@ -45,28 +45,28 @@ export function BuildPlateGrid({ sizeX = 200, sizeY = 125 }: BuildPlateGridProps
       {/* Platform surface */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]} receiveShadow>
         <planeGeometry args={[sizeX, sizeY]} />
-        <meshStandardMaterial color="#1a1f2e" transparent opacity={0.9} />
+        <meshStandardMaterial color="#0a0a12" transparent opacity={0.95} />
       </mesh>
 
       {/* Grid lines */}
       <lineSegments geometry={gridGeometry}>
-        <lineBasicMaterial color="#1e293b" transparent opacity={0.5} />
+        <lineBasicMaterial color="#ffffff" transparent opacity={0.04} />
       </lineSegments>
 
-      {/* Border */}
+      {/* Border - gradient blue to purple */}
       <Line
         points={borderPoints}
-        color="#3b82f6"
+        color="#0070f3"
         lineWidth={1.5}
         transparent
-        opacity={0.6}
+        opacity={0.4}
       />
 
       {/* Dimension labels */}
       <Text
         position={[0, 0.5, sizeY / 2 + 8]}
-        fontSize={6}
-        color="#64748b"
+        fontSize={5}
+        color="#71717a"
         anchorX="center"
         anchorY="middle"
       >
@@ -74,8 +74,8 @@ export function BuildPlateGrid({ sizeX = 200, sizeY = 125 }: BuildPlateGridProps
       </Text>
       <Text
         position={[sizeX / 2 + 8, 0.5, 0]}
-        fontSize={6}
-        color="#64748b"
+        fontSize={5}
+        color="#71717a"
         anchorX="center"
         anchorY="middle"
         rotation={[0, -Math.PI / 2, 0]}

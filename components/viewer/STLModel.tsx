@@ -5,6 +5,11 @@ import { useLoader } from "@react-three/fiber";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import * as THREE from "three";
 
+export interface ModelClickEvent {
+  point: { x: number; y: number; z: number };
+  normal: { x: number; y: number; z: number };
+}
+
 interface STLModelProps {
   url: string;
   position?: [number, number, number];
@@ -13,6 +18,7 @@ interface STLModelProps {
   color?: string;
   selected?: boolean;
   onClick?: () => void;
+  onSurfaceClick?: (event: ModelClickEvent) => void;
   autoScale?: boolean;
   targetSize?: number;
 }
@@ -25,6 +31,7 @@ export function STLModel({
   color = "#94a3b8",
   selected = false,
   onClick,
+  onSurfaceClick,
   autoScale = true,
   targetSize = 80,
 }: STLModelProps) {
@@ -81,6 +88,12 @@ export function STLModel({
       onClick={(e) => {
         e.stopPropagation();
         onClick?.();
+        if (onSurfaceClick && e.face) {
+          onSurfaceClick({
+            point: { x: e.point.x, y: e.point.y, z: e.point.z },
+            normal: { x: e.face.normal.x, y: e.face.normal.y, z: e.face.normal.z },
+          });
+        }
       }}
       onPointerOver={(e) => {
         e.stopPropagation();

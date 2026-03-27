@@ -3,7 +3,7 @@ import { DEFAULT_LABEL_SETTINGS, type LabelSettings } from './constants';
 
 export function calculateLabelPose(
   boundingBox: BoundingBox,
-  fileName: string,
+  labelText: string,
   settings: LabelSettings = DEFAULT_LABEL_SETTINGS
 ): LabelPose {
   const { min_corner, max_corner } = boundingBox;
@@ -19,7 +19,7 @@ export function calculateLabelPose(
     x_direction: [0, 1, 0],
   };
 
-  const text = fileName.replace(/\.stl$/i, '').slice(0, settings.maxLabelLen);
+  const text = labelText.slice(0, settings.maxLabelLen);
 
   return { position, orientation, text };
 }

@@ -4,7 +4,7 @@ import { Suspense, Component, ReactNode } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Environment, ContactShadows } from "@react-three/drei";
 import { BuildPlateGrid } from "./BuildPlateGrid";
-import { STLModel } from "./STLModel";
+import { STLModel, type ModelClickEvent } from "./STLModel";
 
 interface ModelData {
   id: string;
@@ -18,6 +18,7 @@ interface ModelData {
 interface STLViewerProps {
   models?: ModelData[];
   onModelClick?: (id: string) => void;
+  onModelSurfaceClick?: (id: string, event: ModelClickEvent) => void;
   buildPlateSize?: { x: number; y: number };
   className?: string;
 }
@@ -46,18 +47,19 @@ class ModelErrorBoundary extends Component<
 export function STLViewer({
   models = [],
   onModelClick,
+  onModelSurfaceClick,
   buildPlateSize = { x: 200, y: 125 },
   className = ""
 }: STLViewerProps) {
   const camDistance = Math.max(buildPlateSize.x, buildPlateSize.y) * 1.2;
 
   return (
-    <div className={`w-full h-full bg-[#0d1117] rounded-xl overflow-hidden ${className}`}>
+    <div className={`w-full h-full bg-[#050507] rounded-xl overflow-hidden ${className}`}>
       <Canvas
         camera={{ position: [0, camDistance * 0.7, camDistance], fov: 45, near: 0.1, far: 5000 }}
         shadows
       >
-        <color attach="background" args={["#0d1117"]} />
+        <color attach="background" args={["#050507"]} />
 
         <ambientLight intensity={0.4} />
         <directionalLight
@@ -82,6 +84,7 @@ export function STLViewer({
                 color={model.color || "#94a3b8"}
                 selected={model.selected}
                 onClick={() => onModelClick?.(model.id)}
+                onSurfaceClick={(e) => onModelSurfaceClick?.(model.id, e)}
               />
             </Suspense>
           </ModelErrorBoundary>
