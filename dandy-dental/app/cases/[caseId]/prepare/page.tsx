@@ -11,6 +11,9 @@ import { Progress } from "@/components/ui/Progress";
 import { STLViewer } from "@/components/viewer/STLViewer";
 import { ViewerToolbar } from "@/components/viewer/ViewerControls";
 import { usePrintSession } from "@/store/print-session";
+import { usePrinterMode } from "@/store/printer-mode";
+import { calculateLabelPose } from "@/lib/label-calc";
+import { MaterialSelector } from "@/components/prepare/MaterialSelector";
 import {
   ArrowLeft,
   ArrowRight,
@@ -23,8 +26,9 @@ import {
   Tag,
   Printer,
   CheckCircle2,
+  Layers,
 } from "lucide-react";
-import type { Scan, DeviceStatus } from "@/lib/types";
+import type { Scan, DeviceStatus, SceneModel, ModelProperties } from "@/lib/types";
 
 const STEPS = [
   { label: "Select Models", icon: Box },
@@ -44,6 +48,9 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
   const [error, setError] = useState("");
 
   const store = usePrintSession();
+  const { getBuildPlate, getMachineTypes } = usePrinterMode();
+  const buildPlate = getBuildPlate();
+  const allowedMachineTypes = getMachineTypes();
 
   useEffect(() => {
     store.reset();
@@ -65,6 +72,34 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
       else next.add(id);
       return next;
     });
+  };
+
+  // Fetch fresh scene data from PreForm and update model state
+  const refreshSceneData = async () => {
+    if (!store.preformSceneId) return;
+    try {
+      const res = await fetch(`/api/preform/scenes/${store.preformSceneId}`);
+      if (!res.ok) return;
+      const scene: SceneModel = await res.json();
+      if (scene.models) {
+        const updated = store.models.map((m) => {
+          const fresh = scene.models.find(
+            (sm: ModelProperties) => sm.id === m.preformModelId
+          );
+          if (fresh) {
+            return {
+              ...m,
+              position: fresh.position,
+              boundingBox: fresh.bounding_box,
+            };
+          }
+          return m;
+        });
+        store.setModels(updated);
+      }
+    } catch (e) {
+      console.error("Failed to refresh scene data:", e);
+    }
   };
 
   // ----- Workflow Actions -----
@@ -127,9 +162,22 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
   const autoOrient = async () => {
     if (!store.preformSceneId) return;
     store.setProcessing(true, "Auto-orienting...");
+    setError("");
     try {
-      await fetch(`/api/preform/scenes/${store.preformSceneId}/auto-orient`, { method: "POST" });
-    } catch {} finally {
+      const body =
+        store.printMode === "direct"
+          ? { models: "ALL", mode: "DENTAL", tilt: store.directPrintTiltDegrees }
+          : { models: "ALL" };
+      const res = await fetch(`/api/preform/scenes/${store.preformSceneId}/auto-orient`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Auto-orient failed");
+      await refreshSceneData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Auto-orient failed");
+    } finally {
       store.setProcessing(false);
     }
   };
@@ -137,13 +185,18 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
   const autoLayout = async () => {
     if (!store.preformSceneId) return;
     store.setProcessing(true, "Auto-layout...");
+    setError("");
     try {
-      await fetch(`/api/preform/scenes/${store.preformSceneId}/auto-layout`, {
+      const res = await fetch(`/api/preform/scenes/${store.preformSceneId}/auto-layout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lock_rotation: true }),
       });
-    } catch {} finally {
+      if (!res.ok) throw new Error("Auto-layout failed");
+      await refreshSceneData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Auto-layout failed");
+    } finally {
       store.setProcessing(false);
     }
   };
@@ -151,8 +204,9 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
   const generateSupports = async () => {
     if (!store.preformSceneId) return;
     store.setProcessing(true, "Generating supports...");
+    setError("");
     try {
-      await fetch(`/api/preform/scenes/${store.preformSceneId}/auto-support`, {
+      const res = await fetch(`/api/preform/scenes/${store.preformSceneId}/auto-support`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -162,8 +216,11 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
           raft_type: "MINI_RAFTS_ON_BP",
         }),
       });
+      if (!res.ok) throw new Error("Failed to generate supports");
       store.models.forEach((m) => store.updateModel(m.uploadId, { hasSupports: true }));
-    } catch {} finally {
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to generate supports");
+    } finally {
       store.setProcessing(false);
     }
   };
@@ -171,31 +228,42 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
   const applyLabels = async () => {
     if (!store.preformSceneId || !store.labelEnabled) return;
     store.setProcessing(true, "Applying labels...");
+    setError("");
     try {
+      // Refresh scene data to get current bounding boxes
+      await refreshSceneData();
+
       for (const model of store.models) {
         if (!model.preformModelId || !model.boundingBox) continue;
-        const bb = model.boundingBox;
-        const text = model.fileName.replace(/\.stl$/i, "").slice(0, 16);
-        await fetch(`/api/preform/scenes/${store.preformSceneId}/label`, {
+        const pose = calculateLabelPose(model.boundingBox, model.fileName, {
+          applicationMode: store.labelMode,
+          fontSizeMm: store.labelFontSize,
+          depthMm: store.labelDepth,
+          verticalOffsetMm: 8.0,
+          maxLabelLen: 16,
+        });
+        const res = await fetch(`/api/preform/scenes/${store.preformSceneId}/label`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             model_id: model.preformModelId,
-            label: text,
-            position: {
-              x: bb.max_corner.x,
-              y: (bb.min_corner.y + bb.max_corner.y) / 2,
-              z: bb.min_corner.z + 8,
-            },
-            orientation: { z_direction: [1, 0, 0], x_direction: [0, 1, 0] },
+            label: pose.text,
+            position: pose.position,
+            orientation: pose.orientation,
             application_mode: store.labelMode,
             font_size_mm: store.labelFontSize,
             depth_mm: store.labelDepth,
           }),
         });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(`Label failed for ${model.fileName}: ${(err as Record<string, string>).error || res.statusText}`);
+        }
         store.updateModel(model.uploadId, { hasLabel: true });
       }
-    } catch {} finally {
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to apply labels");
+    } finally {
       store.setProcessing(false);
     }
   };
@@ -238,6 +306,15 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
     }
   };
 
+  // Determine which steps to show based on print mode
+  const shouldShowSupports = store.printMode === "direct";
+
+  // When in model print mode, skip supports step (step 3 → step 4)
+  const getNextStep = (current: number) => {
+    if (current === 2 && !shouldShowSupports) return 4; // skip supports
+    return current + 1;
+  };
+
   // ----- 3D Viewer Models -----
   const viewerModels = store.models.map((m) => ({
     id: m.uploadId,
@@ -265,31 +342,43 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
             <ArrowLeft className="w-5 h-5" />
           </Link>
           <h1 className="font-semibold">Print Preparation</h1>
+          {store.printMode === "direct" && (
+            <Badge variant="warning" className="text-[10px]">Direct Print</Badge>
+          )}
+          {store.printMode === "model" && (
+            <Badge variant="outline" className="text-[10px]">Model Print</Badge>
+          )}
         </div>
         {/* Step indicator */}
         <div className="flex items-center gap-1">
-          {STEPS.map((step, i) => (
-            <div key={i} className="flex items-center">
-              <button
-                onClick={() => store.setStep(i)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                  i === store.currentStep
-                    ? "bg-primary/10 text-primary"
-                    : i < store.currentStep
-                    ? "text-success"
-                    : "text-muted-foreground"
-                }`}
-              >
-                {i < store.currentStep ? (
-                  <Check className="w-3.5 h-3.5" />
-                ) : (
-                  <step.icon className="w-3.5 h-3.5" />
+          {STEPS.map((step, i) => {
+            // Hide supports step in model print mode
+            if (i === 3 && !shouldShowSupports) return null;
+            return (
+              <div key={i} className="flex items-center">
+                <button
+                  onClick={() => store.setStep(i)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                    i === store.currentStep
+                      ? "bg-primary/10 text-primary"
+                      : i < store.currentStep
+                      ? "text-success"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {i < store.currentStep ? (
+                    <Check className="w-3.5 h-3.5" />
+                  ) : (
+                    <step.icon className="w-3.5 h-3.5" />
+                  )}
+                  <span className="hidden lg:inline">{step.label}</span>
+                </button>
+                {i < STEPS.length - 1 && !(i === 3 && !shouldShowSupports) && (
+                  <ArrowRight className="w-3 h-3 text-border mx-1" />
                 )}
-                <span className="hidden lg:inline">{step.label}</span>
-              </button>
-              {i < STEPS.length - 1 && <ArrowRight className="w-3 h-3 text-border mx-1" />}
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -300,6 +389,7 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
           <STLViewer
             models={viewerModels}
             onModelClick={(id) => store.setSelectedModel(id)}
+            buildPlateSize={buildPlate}
             className="w-full h-full"
           />
           <ViewerToolbar className="absolute top-4 right-4" />
@@ -363,38 +453,65 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
               </div>
             )}
 
-            {/* Step 1: Scene Setup */}
+            {/* Step 1: Scene Setup + Print Mode */}
             {store.currentStep === 1 && (
               <div className="space-y-4">
                 <h3 className="font-semibold">Scene Setup</h3>
+
+                {/* Print Mode Selector */}
                 <div>
-                  <label className="text-xs font-medium mb-1 block">Machine Type</label>
-                  <Select value={store.machineType} onChange={(e) => store.setMachineType(e.target.value)}>
-                    <option value="FORM-4-0">Form 4</option>
-                    <option value="FORM-4L-0">Form 4L</option>
-                    <option value="FORM-3-0">Form 3+</option>
-                    <option value="FORM-3L-0">Form 3L</option>
-                  </Select>
+                  <label className="text-xs font-medium mb-2 block">Print Mode</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => store.setPrintMode("model")}
+                      className={`p-3 rounded-lg border text-left transition-colors ${
+                        store.printMode === "model"
+                          ? "border-primary bg-primary/10"
+                          : "border-border hover:border-primary/30"
+                      }`}
+                    >
+                      <Layers className="w-4 h-4 mb-1" />
+                      <p className="text-xs font-medium">Model Print</p>
+                      <p className="text-[10px] text-muted-foreground">Flat, no supports. For thermoforming.</p>
+                    </button>
+                    <button
+                      onClick={() => store.setPrintMode("direct")}
+                      className={`p-3 rounded-lg border text-left transition-colors ${
+                        store.printMode === "direct"
+                          ? "border-primary bg-primary/10"
+                          : "border-border hover:border-primary/30"
+                      }`}
+                    >
+                      <Shield className="w-4 h-4 mb-1" />
+                      <p className="text-xs font-medium">Direct Print</p>
+                      <p className="text-[10px] text-muted-foreground">{store.directPrintTiltDegrees}° tilt with supports.</p>
+                    </button>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs font-medium mb-1 block">Material Code</label>
-                  <Input
-                    value={store.materialCode}
-                    onChange={(e) => store.setMaterialCode(e.target.value)}
-                    placeholder="e.g., FLDLCO11"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium mb-1 block">Layer Thickness (mm)</label>
-                  <Select
-                    value={String(store.layerThicknessMm)}
-                    onChange={(e) => store.setLayerThickness(parseFloat(e.target.value))}
-                  >
-                    <option value="0.025">0.025mm (25μm)</option>
-                    <option value="0.05">0.050mm (50μm)</option>
-                    <option value="0.1">0.100mm (100μm)</option>
-                  </Select>
-                </div>
+
+                <MaterialSelector
+                  machineType={store.machineType}
+                  materialCode={store.materialCode}
+                  layerThicknessMm={store.layerThicknessMm}
+                  onMachineTypeChange={store.setMachineType}
+                  onMaterialCodeChange={store.setMaterialCode}
+                  onLayerThicknessChange={store.setLayerThickness}
+                />
+
+                {store.printMode === "direct" && (
+                  <div>
+                    <label className="text-xs font-medium mb-1 block">
+                      Tilt Angle: {store.directPrintTiltDegrees}°
+                    </label>
+                    <input
+                      type="range" min="30" max="90" step="5"
+                      value={store.directPrintTiltDegrees}
+                      onChange={(e) => store.setDirectPrintTiltDegrees(parseInt(e.target.value))}
+                      className="w-full accent-primary"
+                    />
+                  </div>
+                )}
+
                 <Button className="w-full" onClick={async () => { await createScene(); await importModels(); }}>
                   {store.isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   Create Scene & Import
@@ -408,21 +525,22 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
                 <h3 className="font-semibold">Orient & Layout</h3>
                 <p className="text-xs text-muted-foreground">
                   {store.models.length} model{store.models.length !== 1 ? "s" : ""} imported.
+                  {store.printMode === "direct" && ` DENTAL orient at ${store.directPrintTiltDegrees}°.`}
                 </p>
                 <Button className="w-full" variant="secondary" onClick={autoOrient} disabled={store.isProcessing}>
-                  Auto Orient
+                  {store.printMode === "direct" ? `Dental Orient (${store.directPrintTiltDegrees}°)` : "Auto Orient"}
                 </Button>
                 <Button className="w-full" variant="secondary" onClick={autoLayout} disabled={store.isProcessing}>
                   Auto Layout
                 </Button>
-                <Button className="w-full" onClick={() => store.setStep(3)}>
+                <Button className="w-full" onClick={() => store.setStep(getNextStep(2))}>
                   Continue <ArrowRight className="w-4 h-4" />
                 </Button>
               </div>
             )}
 
-            {/* Step 3: Supports */}
-            {store.currentStep === 3 && (
+            {/* Step 3: Supports (only for direct print mode) */}
+            {store.currentStep === 3 && shouldShowSupports && (
               <div className="space-y-4">
                 <h3 className="font-semibold">Support Settings</h3>
                 <div>
@@ -522,7 +640,17 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
                     }}
                   >
                     <option value="">Choose a printer...</option>
-                    {devices.map((d) => (
+                    {devices
+                      .filter((d) => {
+                        const name = (d.product_name || "").toLowerCase();
+                        // Form 4L family: name contains "4l" or "4bl"
+                        // Form 4 family: name contains "4" but not "4l" or "4bl"
+                        const isLarge = /4\s*l|4\s*bl/i.test(name);
+                        return allowedMachineTypes.some((mt) => mt.includes("4L") || mt.includes("4BL"))
+                          ? isLarge
+                          : !isLarge;
+                      })
+                      .map((d) => (
                       <option key={d.id} value={d.id}>
                         {d.product_name} ({d.status}) {d.is_connected ? "" : "- offline"}
                       </option>
@@ -531,6 +659,10 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
                 </div>
 
                 <div className="p-3 rounded-lg bg-secondary space-y-2 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Print Mode</span>
+                    <span className="capitalize">{store.printMode}</span>
+                  </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Models</span>
                     <span>{store.models.length}</span>
@@ -545,8 +677,8 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Supports</span>
-                    <Badge variant={store.models.some((m) => m.hasSupports) ? "success" : "warning"} className="text-[10px]">
-                      {store.models.some((m) => m.hasSupports) ? "Generated" : "None"}
+                    <Badge variant={store.models.some((m) => m.hasSupports) ? "success" : store.printMode === "model" ? "outline" : "warning"} className="text-[10px]">
+                      {store.models.some((m) => m.hasSupports) ? "Generated" : store.printMode === "model" ? "N/A" : "None"}
                     </Badge>
                   </div>
                   <div className="flex justify-between">

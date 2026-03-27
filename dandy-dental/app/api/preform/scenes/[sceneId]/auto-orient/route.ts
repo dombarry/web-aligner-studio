@@ -1,12 +1,18 @@
 import { preformPost, PreformError } from '@/lib/preform-client';
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ sceneId: string }> }
 ) {
   try {
     const { sceneId } = await params;
-    const data = await preformPost(`/scene/${sceneId}/auto-orient/`);
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      // No body provided - that's fine, send without body
+    }
+    const data = await preformPost(`/scene/${sceneId}/auto-orient/`, body);
     return Response.json(data);
   } catch (error) {
     if (error instanceof PreformError) {

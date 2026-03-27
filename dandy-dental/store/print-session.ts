@@ -10,6 +10,8 @@ interface ModelInScene {
   hasLabel: boolean;
 }
 
+type PrintMode = "model" | "direct";
+
 interface PrintSessionState {
   // Scene
   preformSceneId: string | null;
@@ -17,6 +19,10 @@ interface PrintSessionState {
   materialCode: string;
   layerThicknessMm: number;
   printSetting: string;
+
+  // Print mode
+  printMode: PrintMode;
+  directPrintTiltDegrees: number;
 
   // Models
   models: ModelInScene[];
@@ -45,6 +51,9 @@ interface PrintSessionState {
   setMachineType: (v: string) => void;
   setMaterialCode: (v: string) => void;
   setLayerThickness: (v: number) => void;
+  setPrintMode: (mode: PrintMode) => void;
+  setDirectPrintTiltDegrees: (v: number) => void;
+  setModels: (models: ModelInScene[]) => void;
   addModel: (m: ModelInScene) => void;
   updateModel: (uploadId: string, updates: Partial<ModelInScene>) => void;
   setSelectedModel: (id: string | null) => void;
@@ -67,6 +76,8 @@ const initialState = {
   materialCode: "FLDLCO11",
   layerThicknessMm: 0.1,
   printSetting: "DEFAULT",
+  printMode: "model" as PrintMode,
+  directPrintTiltDegrees: 60,
   models: [],
   selectedModelId: null,
   supportDensity: 1.10,
@@ -89,6 +100,9 @@ export const usePrintSession = create<PrintSessionState>((set) => ({
   setMachineType: (v) => set({ machineType: v }),
   setMaterialCode: (v) => set({ materialCode: v }),
   setLayerThickness: (v) => set({ layerThicknessMm: v }),
+  setPrintMode: (mode) => set({ printMode: mode }),
+  setDirectPrintTiltDegrees: (v) => set({ directPrintTiltDegrees: v }),
+  setModels: (models) => set({ models }),
   addModel: (m) => set((s) => ({ models: [...s.models, m] })),
   updateModel: (uploadId, updates) =>
     set((s) => ({

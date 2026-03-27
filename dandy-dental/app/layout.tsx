@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "DandyDental | Aligner Manufacturing",
-  description: "Browser-based dental aligner manufacturing tool with Formlabs integration",
+  title: "Web Aligner Studio",
+  description: "Browser-based aligner manufacturing tool with Formlabs integration",
 };
 
 export default function RootLayout({

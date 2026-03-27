@@ -14,6 +14,7 @@ import {
   Trash2,
   Link2,
   ClipboardList,
+  Stethoscope,
 } from "lucide-react";
 import type { Scan } from "@/lib/types";
 
@@ -85,12 +86,20 @@ export default function CaseDetailPage({ params }: { params: Promise<{ caseId: s
         </div>
         <div className="flex gap-3">
           {scans.length > 0 && (
-            <Link href={`/cases/${caseId}/prepare`}>
-              <Button>
-                <Printer className="w-4 h-4" />
-                Prepare Print
-              </Button>
-            </Link>
+            <>
+              <Link href={`/cases/${caseId}/treatment`}>
+                <Button variant="secondary">
+                  <Stethoscope className="w-4 h-4" />
+                  Treatment Plan
+                </Button>
+              </Link>
+              <Link href={`/cases/${caseId}/prepare`}>
+                <Button>
+                  <Printer className="w-4 h-4" />
+                  Prepare Print
+                </Button>
+              </Link>
+            </>
           )}
         </div>
       </div>
