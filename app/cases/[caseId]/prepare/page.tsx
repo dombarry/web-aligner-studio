@@ -9,9 +9,12 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Progress } from "@/components/ui/Progress";
 import { STLViewer } from "@/components/viewer/STLViewer";
+import type { ModelClickEvent } from "@/components/viewer/STLModel";
 import { ViewerToolbar } from "@/components/viewer/ViewerControls";
 import { usePrintSession } from "@/store/print-session";
-import { calculateLabelPose } from "@/lib/label-calc";
+import { usePrinterMode } from "@/store/printer-mode";
+import { useAppSettings } from "@/store/app-settings";
+import { useMaterialLibrary } from "@/store/material-library";
 import { MaterialSelector } from "@/components/prepare/MaterialSelector";
 import {
   ArrowLeft,
@@ -43,18 +46,33 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
   const [scans, setScans] = useState<Scan[]>([]);
   const [selectedScans, setSelectedScans] = useState<Set<string>>(new Set());
   const [devices, setDevices] = useState<DeviceStatus[]>([]);
+  const [patientName, setPatientName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Label placement: per-model click position + normal
+  const [labelPlacements, setLabelPlacements] = useState<Record<string, { point: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number } }>>({});
+  const [placingLabel, setPlacingLabel] = useState(false);
+
   const store = usePrintSession();
+  const { getBuildPlate, getMachineTypes } = usePrinterMode();
+  const buildPlate = getBuildPlate();
+  const allowedMachineTypes = getMachineTypes();
+  const { showVirtualPrinters } = useAppSettings();
+  const { getMaterialName, fetch: fetchMaterials } = useMaterialLibrary();
+
+  // Ensure material library is loaded for name lookups
+  useEffect(() => { fetchMaterials(); }, [fetchMaterials]);
 
   useEffect(() => {
     store.reset();
     Promise.all([
+      fetch(`/api/cases/${caseId}`).then((r) => r.json()),
       fetch(`/api/cases/${caseId}/scans`).then((r) => r.json()),
       fetch("/api/preform/devices").then((r) => r.json()).catch(() => ({ devices: [] })),
     ])
-      .then(([s, d]) => {
+      .then(([c, s, d]) => {
+        setPatientName(c.patientName || "");
         setScans(s.scans || []);
         setDevices(d.devices || []);
       })
@@ -99,7 +117,7 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
   };
 
   // ----- Workflow Actions -----
-  const createScene = async () => {
+  const createScene = async (): Promise<string | null> => {
     store.setProcessing(true, "Creating scene...");
     setError("");
     try {
@@ -116,22 +134,25 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
       if (!res.ok) throw new Error("Failed to create scene");
       const scene = await res.json();
       store.setSceneId(scene.id);
-      store.setStep(2);
+      store.setProcessing(false);
+      return scene.id;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create scene");
+      return null;
     } finally {
       store.setProcessing(false);
     }
   };
 
-  const importModels = async () => {
-    if (!store.preformSceneId) return;
+  const importModels = async (sceneId?: string) => {
+    const activeSceneId = sceneId || usePrintSession.getState().preformSceneId;
+    if (!activeSceneId) return;
     store.setProcessing(true, "Importing models...");
     setError("");
     try {
       const selected = scans.filter((s) => selectedScans.has(s.id));
       for (const scan of selected) {
-        const res = await fetch(`/api/preform/scenes/${store.preformSceneId}/import-model`, {
+        const res = await fetch(`/api/preform/scenes/${activeSceneId}/import-model`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ uploadId: scan.id, repairBehavior: "REPAIR" }),
@@ -221,34 +242,117 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
     }
   };
 
+  const getLabelText = (model: { fileName: string }): string => {
+    const state = usePrintSession.getState();
+    switch (state.labelTextMode) {
+      case "patient":
+        return patientName || "Patient";
+      case "custom":
+        return state.labelCustomText || "Label";
+      case "filename":
+      default:
+        return model.fileName.replace(/\.stl$/i, "");
+    }
+  };
+
+  // Convert face normal into PreForm orientation (z_direction = surface normal, x_direction = perpendicular)
+  const normalToOrientation = (normal: { x: number; y: number; z: number }) => {
+    const n = { x: normal.x, y: normal.y, z: normal.z };
+    // Find a vector not parallel to the normal to use as "up" reference
+    const up = Math.abs(n.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+    // x_direction = cross(normal, up), normalized
+    const cx = n.y * up.z - n.z * up.y;
+    const cy = n.z * up.x - n.x * up.z;
+    const cz = n.x * up.y - n.y * up.x;
+    const len = Math.sqrt(cx * cx + cy * cy + cz * cz) || 1;
+    return {
+      z_direction: [n.x, n.y, n.z],
+      x_direction: [cx / len, cy / len, cz / len],
+    };
+  };
+
+  const handleSurfaceClick = (modelId: string, event: ModelClickEvent) => {
+    if (store.currentStep !== 4 || !placingLabel) return;
+    const model = usePrintSession.getState().models.find((m) => m.uploadId === modelId);
+    if (!model) return;
+    setLabelPlacements((prev) => ({
+      ...prev,
+      [model.uploadId]: { point: event.point, normal: event.normal },
+    }));
+    setPlacingLabel(false);
+  };
+
   const applyLabels = async () => {
-    if (!store.preformSceneId || !store.labelEnabled) return;
+    const state = usePrintSession.getState();
+    if (!state.preformSceneId || !state.labelEnabled) return;
+
+    // Ensure every model has a placement
+    const modelsWithoutPlacement = state.models.filter((m) => !labelPlacements[m.uploadId]);
+    if (modelsWithoutPlacement.length > 0) {
+      setError(`Click on each model to place the label. Missing: ${modelsWithoutPlacement.map((m) => m.fileName).join(", ")}`);
+      return;
+    }
+
     store.setProcessing(true, "Applying labels...");
     setError("");
     try {
-      // Refresh scene data to get current bounding boxes
+      // Refresh scene data to get current bounding boxes from PreForm
       await refreshSceneData();
+      const freshModels = usePrintSession.getState().models;
 
-      for (const model of store.models) {
-        if (!model.preformModelId || !model.boundingBox) continue;
-        const pose = calculateLabelPose(model.boundingBox, model.fileName, {
-          applicationMode: store.labelMode,
-          fontSizeMm: store.labelFontSize,
-          depthMm: store.labelDepth,
-          verticalOffsetMm: 8.0,
-          maxLabelLen: 16,
-        });
-        const res = await fetch(`/api/preform/scenes/${store.preformSceneId}/label`, {
+      for (const model of freshModels) {
+        if (!model.preformModelId) continue;
+        const placement = labelPlacements[model.uploadId];
+        if (!placement) continue;
+
+        const labelText = getLabelText(model).slice(0, 16);
+
+        // Map viewer click to PreForm coordinates using bounding box
+        // The viewer auto-centers models at origin, but PreForm has them
+        // at model.position with their own bounding box
+        let position: { x: number; y: number; z: number };
+
+        if (model.boundingBox) {
+          const bb = model.boundingBox;
+          // Get viewer model's approximate extent (centered at origin)
+          const vSizeX = bb.max_corner.x - bb.min_corner.x;
+          const vSizeY = bb.max_corner.y - bb.min_corner.y;
+          const vSizeZ = bb.max_corner.z - bb.min_corner.z;
+          // Normalize the click point to 0..1 range relative to viewer model
+          // Viewer centers at 0,0 and sits on y=0, so range is roughly [-size/2..size/2] for x,z and [0..sizeY] for y
+          const relX = vSizeX > 0 ? (placement.point.x / (vSizeX / 2)) : 0; // -1 to 1
+          const relY = vSizeY > 0 ? (placement.point.y / vSizeY) : 0.5; // 0 to 1
+          const relZ = vSizeZ > 0 ? (placement.point.z / (vSizeZ / 2)) : 0; // -1 to 1
+          // Map to PreForm bounding box
+          const pfCenterX = (bb.min_corner.x + bb.max_corner.x) / 2;
+          const pfCenterZ = (bb.min_corner.z + bb.max_corner.z) / 2;
+          position = {
+            x: pfCenterX + relX * (vSizeX / 2),
+            y: bb.min_corner.y + relY * vSizeY,
+            z: pfCenterZ + relZ * (vSizeZ / 2),
+          };
+        } else {
+          // Fallback: use click point offset by model position
+          position = {
+            x: placement.point.x + model.position.x,
+            y: placement.point.y + model.position.y,
+            z: placement.point.z + model.position.z,
+          };
+        }
+
+        const orientation = normalToOrientation(placement.normal);
+
+        const res = await fetch(`/api/preform/scenes/${state.preformSceneId}/label`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             model_id: model.preformModelId,
-            label: pose.text,
-            position: pose.position,
-            orientation: pose.orientation,
-            application_mode: store.labelMode,
-            font_size_mm: store.labelFontSize,
-            depth_mm: store.labelDepth,
+            label: labelText,
+            position,
+            orientation,
+            application_mode: state.labelMode,
+            font_size_mm: state.labelFontSize,
+            depth_mm: state.labelDepth,
           }),
         });
         if (!res.ok) {
@@ -312,11 +416,13 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
   };
 
   // ----- 3D Viewer Models -----
+  // PreForm uses Z-up coordinate system, Three.js uses Y-up
+  // Swap: viewer X = PreForm X, viewer Y = PreForm Z, viewer Z = PreForm Y
   const viewerModels = store.models.map((m) => ({
     id: m.uploadId,
     url: `/api/uploads/${m.uploadId}/file`,
     name: m.fileName,
-    position: [m.position.x, m.position.y, m.position.z] as [number, number, number],
+    position: [m.position.x, m.position.z, m.position.y] as [number, number, number],
     selected: m.uploadId === store.selectedModelId,
     color: m.hasSupports ? "#22c55e" : "#94a3b8",
   }));
@@ -385,6 +491,8 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
           <STLViewer
             models={viewerModels}
             onModelClick={(id) => store.setSelectedModel(id)}
+            onModelSurfaceClick={handleSurfaceClick}
+            buildPlateSize={buildPlate}
             className="w-full h-full"
           />
           <ViewerToolbar className="absolute top-4 right-4" />
@@ -507,7 +615,7 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
                   </div>
                 )}
 
-                <Button className="w-full" onClick={async () => { await createScene(); await importModels(); }}>
+                <Button className="w-full" onClick={async () => { const id = await createScene(); if (id) { await importModels(id); store.setStep(2); } }}>
                   {store.isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   Create Scene & Import
                 </Button>
@@ -575,49 +683,130 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
             {/* Step 4: Labels */}
             {store.currentStep === 4 && (
               <div className="space-y-4">
-                <h3 className="font-semibold">Label Settings</h3>
-                <label className="flex items-center gap-2">
+                <h3 className="font-semibold">Labels</h3>
+
+                {/* Label text source */}
+                <div>
+                  <label className="text-xs font-medium mb-2 block">Label Text</label>
+                  <div className="space-y-2">
+                    {([
+                      { value: "filename" as const, label: "File Name", desc: store.models[0]?.fileName?.replace(/\.stl$/i, "") || "filename" },
+                      { value: "patient" as const, label: "Patient Name", desc: patientName || "—" },
+                      { value: "custom" as const, label: "Custom Text", desc: null },
+                    ]).map((opt) => (
+                      <label
+                        key={opt.value}
+                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                          store.labelTextMode === opt.value
+                            ? "border-primary bg-primary/5"
+                            : "border-border hover:border-primary/30"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="labelTextMode"
+                          value={opt.value}
+                          checked={store.labelTextMode === opt.value}
+                          onChange={() => { store.setLabelEnabled(true); store.setLabelTextMode(opt.value); }}
+                          className="accent-primary mt-0.5"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium">{opt.label}</p>
+                          {opt.desc && (
+                            <p className="text-[10px] text-muted-foreground truncate">{opt.desc}</p>
+                          )}
+                          {opt.value === "custom" && store.labelTextMode === "custom" && (
+                            <Input
+                              className="mt-2"
+                              placeholder="Enter label text..."
+                              value={store.labelCustomText}
+                              onChange={(e) => store.setLabelCustomText(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          )}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Placement */}
+                <div>
+                  <label className="text-xs font-medium mb-2 block">Placement</label>
+                  <p className="text-[10px] text-muted-foreground mb-2">
+                    Click on each model in the viewer to place the label at that location.
+                  </p>
+                  <div className="space-y-1.5">
+                    {store.models.map((m) => {
+                      const placed = !!labelPlacements[m.uploadId];
+                      return (
+                        <div key={m.uploadId} className="flex items-center gap-2 text-xs p-2 rounded-lg bg-secondary">
+                          <div className={`w-2 h-2 rounded-full ${placed ? "bg-success" : "bg-muted-foreground"}`} />
+                          <span className="flex-1 truncate">{m.fileName}</span>
+                          {placed ? (
+                            <span className="text-success text-[10px]">Placed</span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-[10px] h-6 px-2"
+                              onClick={() => setPlacingLabel(true)}
+                            >
+                              Click to place
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {placingLabel && (
+                    <div className="mt-2 p-2 rounded-lg bg-primary/10 border border-primary/20 text-xs text-primary font-medium text-center animate-pulse">
+                      Click on the model surface to place label...
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium mb-1 block">Style</label>
+                    <Select value={store.labelMode} onChange={(e) => store.setLabelMode(e.target.value as "ENGRAVE" | "EMBOSS")}>
+                      <option value="ENGRAVE">Engrave</option>
+                      <option value="EMBOSS">Emboss</option>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium mb-1 block">Font: {store.labelFontSize}mm</label>
+                    <input
+                      type="range" min="2" max="10" step="0.5"
+                      value={store.labelFontSize}
+                      onChange={(e) => store.setLabelFontSize(parseFloat(e.target.value))}
+                      className="w-full accent-primary"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium mb-1 block">Depth: {store.labelDepth}mm</label>
                   <input
-                    type="checkbox"
-                    checked={store.labelEnabled}
-                    onChange={(e) => store.setLabelEnabled(e.target.checked)}
-                    className="accent-primary"
+                    type="range" min="0.2" max="2" step="0.1"
+                    value={store.labelDepth}
+                    onChange={(e) => store.setLabelDepth(parseFloat(e.target.value))}
+                    className="w-full accent-primary"
                   />
-                  <span className="text-sm">Enable labels</span>
-                </label>
-                {store.labelEnabled && (
-                  <>
-                    <div>
-                      <label className="text-xs font-medium mb-1 block">Mode</label>
-                      <Select value={store.labelMode} onChange={(e) => store.setLabelMode(e.target.value as "ENGRAVE" | "EMBOSS")}>
-                        <option value="ENGRAVE">Engrave</option>
-                        <option value="EMBOSS">Emboss</option>
-                      </Select>
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium mb-1 block">Font Size: {store.labelFontSize}mm</label>
-                      <input
-                        type="range" min="2" max="10" step="0.5"
-                        value={store.labelFontSize}
-                        onChange={(e) => store.setLabelFontSize(parseFloat(e.target.value))}
-                        className="w-full accent-primary"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium mb-1 block">Depth: {store.labelDepth}mm</label>
-                      <input
-                        type="range" min="0.2" max="2" step="0.1"
-                        value={store.labelDepth}
-                        onChange={(e) => store.setLabelDepth(parseFloat(e.target.value))}
-                        className="w-full accent-primary"
-                      />
-                    </div>
-                  </>
-                )}
-                <Button className="w-full" onClick={async () => { await applyLabels(); store.setStep(5); }} disabled={store.isProcessing}>
-                  {store.isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tag className="w-4 h-4" />}
-                  {store.labelEnabled ? "Apply Labels & Continue" : "Skip Labels"}
-                </Button>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button
+                    className="flex-1"
+                    onClick={async () => { await applyLabels(); if (!error) store.setStep(5); }}
+                    disabled={store.isProcessing || Object.keys(labelPlacements).length === 0 || (store.labelTextMode === "custom" && !store.labelCustomText.trim())}
+                  >
+                    {store.isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tag className="w-4 h-4" />}
+                    Apply Labels ({Object.keys(labelPlacements).length}/{store.models.length})
+                  </Button>
+                  <Button variant="secondary" onClick={() => { store.setLabelEnabled(false); store.setStep(5); }}>
+                    Skip
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -635,11 +824,24 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
                     }}
                   >
                     <option value="">Choose a printer...</option>
-                    {devices.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.product_name} ({d.status}) {d.is_connected ? "" : "- offline"}
-                      </option>
-                    ))}
+                    {devices
+                      .filter((d) => {
+                        if (!showVirtualPrinters && d.connection_type === "VIRTUAL") return false;
+                        const name = (d.product_name || "").toLowerCase();
+                        const isLarge = /4\s*l|4\s*bl/i.test(name);
+                        return allowedMachineTypes.some((mt) => mt.includes("4L") || mt.includes("4BL"))
+                          ? isLarge
+                          : !isLarge;
+                      })
+                      .map((d) => {
+                        const materialCode = d.tank_material_code || (d.cartridge_data ? Object.values(d.cartridge_data)[0]?.cartridgeMaterialCode : null);
+                        const materialLabel = materialCode ? getMaterialName(materialCode) : null;
+                        return (
+                          <option key={d.id} value={d.id}>
+                            {d.id}{materialLabel ? ` — ${materialLabel}` : ""} ({d.status}){!d.is_connected ? " - offline" : ""}
+                          </option>
+                        );
+                      })}
                   </Select>
                 </div>
 
@@ -654,7 +856,7 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Material</span>
-                    <span className="font-mono">{store.materialCode}</span>
+                    <span>{getMaterialName(store.materialCode)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Layer</span>

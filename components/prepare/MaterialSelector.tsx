@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { Select } from "@/components/ui/Select";
 import { Loader2 } from "lucide-react";
-import type { MaterialInfo } from "@/lib/types";
+import { useMaterialLibrary, type PrinterType, type MaterialEntry } from "@/store/material-library";
 
 interface MaterialSelectorProps {
   machineType: string;
@@ -24,93 +24,64 @@ export function MaterialSelector({
   onLayerThicknessChange,
   onPrintSettingChange,
 }: MaterialSelectorProps) {
-  const [materialData, setMaterialData] = useState<MaterialInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const { printerTypes, loaded, loading, error, fetch: fetchMaterials } = useMaterialLibrary();
 
   useEffect(() => {
-    fetch("/api/preform/materials")
-      .then((r) => {
-        if (!r.ok) throw new Error("Failed to fetch materials");
-        return r.json();
-      })
-      .then((data) => {
-        // The API returns an array of MaterialInfo objects
-        setMaterialData(Array.isArray(data) ? data : []);
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
+    fetchMaterials();
+  }, [fetchMaterials]);
 
-  // Available machine types
-  const machineTypes = useMemo(
-    () => materialData.map((m) => ({ id: m.machine_type_id, name: m.machine_type_name })),
-    [materialData]
+  // Find the printer type that contains the current machine type
+  const selectedPrinterType = useMemo(
+    () => printerTypes.find((pt) => pt.supportedMachineTypeIds.includes(machineType)),
+    [printerTypes, machineType]
   );
 
-  // Materials for selected machine type
-  const selectedMachine = useMemo(
-    () => materialData.find((m) => m.machine_type_id === machineType),
-    [materialData, machineType]
-  );
+  const materials = selectedPrinterType?.materials || [];
 
-  const materials = useMemo(
-    () => selectedMachine?.materials || [],
-    [selectedMachine]
-  );
-
-  // Find the currently selected material
   const selectedMaterial = useMemo(
-    () => materials.find((m) => m.material_code === materialCode),
+    () => materials.find((m) => m.code === materialCode),
     [materials, materialCode]
   );
 
-  // Layer thickness options for selected material
   const layerOptions = useMemo(
-    () =>
-      selectedMaterial?.material_settings.map((ms) => ({
-        thickness: ms.scene_settings.layer_thickness_mm,
-        printSetting: ms.scene_settings.print_setting,
-        name: ms.setting_name,
-        description: ms.setting_description,
-      })) || [],
+    () => selectedMaterial?.settings.map((s) => ({
+      thickness: s.sceneSettings.layer_thickness_mm,
+      printSetting: s.sceneSettings.print_setting,
+      name: s.label,
+    })) || [],
     [selectedMaterial]
   );
 
-  // Auto-select first material when machine type changes
-  const handleMachineTypeChange = (newType: string) => {
-    onMachineTypeChange(newType);
-    const machine = materialData.find((m) => m.machine_type_id === newType);
-    if (machine?.materials.length) {
-      const firstMat = machine.materials[0];
-      onMaterialCodeChange(firstMat.material_code);
-      if (firstMat.material_settings.length) {
-        const firstSetting = firstMat.material_settings[0];
-        onLayerThicknessChange(firstSetting.scene_settings.layer_thickness_mm);
-        onPrintSettingChange?.(firstSetting.scene_settings.print_setting);
+  const handlePrinterTypeChange = (newMachineType: string) => {
+    onMachineTypeChange(newMachineType);
+    const pt = printerTypes.find((p) => p.supportedMachineTypeIds.includes(newMachineType));
+    if (pt?.materials.length) {
+      const firstMat = pt.materials[0];
+      onMaterialCodeChange(firstMat.code);
+      if (firstMat.settings.length) {
+        onLayerThicknessChange(firstMat.settings[0].sceneSettings.layer_thickness_mm);
+        onPrintSettingChange?.(firstMat.settings[0].sceneSettings.print_setting);
       }
     }
   };
 
-  // Auto-select first layer thickness when material changes
   const handleMaterialChange = (newCode: string) => {
     onMaterialCodeChange(newCode);
-    const mat = materials.find((m) => m.material_code === newCode);
-    if (mat?.material_settings.length) {
-      const firstSetting = mat.material_settings[0];
-      onLayerThicknessChange(firstSetting.scene_settings.layer_thickness_mm);
-      onPrintSettingChange?.(firstSetting.scene_settings.print_setting);
+    const mat = materials.find((m) => m.code === newCode);
+    if (mat?.settings.length) {
+      onLayerThicknessChange(mat.settings[0].sceneSettings.layer_thickness_mm);
+      onPrintSettingChange?.(mat.settings[0].sceneSettings.print_setting);
     }
   };
 
   const handleLayerChange = (thicknessStr: string) => {
     const thickness = parseFloat(thicknessStr);
     onLayerThicknessChange(thickness);
-    const setting = selectedMaterial?.material_settings.find(
-      (ms) => ms.scene_settings.layer_thickness_mm === thickness
+    const setting = selectedMaterial?.settings.find(
+      (s) => s.sceneSettings.layer_thickness_mm === thickness
     );
     if (setting) {
-      onPrintSettingChange?.(setting.scene_settings.print_setting);
+      onPrintSettingChange?.(setting.sceneSettings.print_setting);
     }
   };
 
@@ -123,8 +94,7 @@ export function MaterialSelector({
     );
   }
 
-  if (error || materialData.length === 0) {
-    // Fallback to manual inputs
+  if (error || printerTypes.length === 0) {
     return (
       <>
         {error && (
@@ -157,9 +127,9 @@ export function MaterialSelector({
             value={String(layerThicknessMm)}
             onChange={(e) => onLayerThicknessChange(parseFloat(e.target.value))}
           >
-            <option value="0.025">0.025mm (25μm)</option>
-            <option value="0.05">0.050mm (50μm)</option>
-            <option value="0.1">0.100mm (100μm)</option>
+            <option value="0.025">0.025mm (25um)</option>
+            <option value="0.05">0.050mm (50um)</option>
+            <option value="0.1">0.100mm (100um)</option>
           </Select>
         </div>
       </>
@@ -169,11 +139,14 @@ export function MaterialSelector({
   return (
     <>
       <div>
-        <label className="text-xs font-medium mb-1 block">Machine Type</label>
-        <Select value={machineType} onChange={(e) => handleMachineTypeChange(e.target.value)}>
-          {machineTypes.map((mt) => (
-            <option key={mt.id} value={mt.id}>
-              {mt.name}
+        <label className="text-xs font-medium mb-1 block">Printer Type</label>
+        <Select
+          value={machineType}
+          onChange={(e) => handlePrinterTypeChange(e.target.value)}
+        >
+          {printerTypes.map((pt) => (
+            <option key={pt.supportedMachineTypeIds[0]} value={pt.supportedMachineTypeIds[0]}>
+              {pt.label}
             </option>
           ))}
         </Select>
@@ -183,13 +156,13 @@ export function MaterialSelector({
         <Select value={materialCode} onChange={(e) => handleMaterialChange(e.target.value)}>
           {materials.length === 0 && <option value="">No materials available</option>}
           {materials.map((mat) => (
-            <option key={mat.material_code} value={mat.material_code}>
-              {mat.material_name}
+            <option key={mat.code} value={mat.code}>
+              {mat.label}
             </option>
           ))}
         </Select>
         {selectedMaterial && (
-          <p className="text-[10px] text-muted-foreground mt-1">{selectedMaterial.material_description}</p>
+          <p className="text-[10px] text-muted-foreground mt-1">{selectedMaterial.description}</p>
         )}
       </div>
       <div>
@@ -201,15 +174,10 @@ export function MaterialSelector({
           {layerOptions.length === 0 && <option value="">Select a material first</option>}
           {layerOptions.map((opt) => (
             <option key={`${opt.thickness}-${opt.printSetting}`} value={String(opt.thickness)}>
-              {opt.thickness}mm - {opt.name}
+              {opt.name || `${opt.thickness}mm`}
             </option>
           ))}
         </Select>
-        {layerOptions.find((o) => o.thickness === layerThicknessMm)?.description && (
-          <p className="text-[10px] text-muted-foreground mt-1">
-            {layerOptions.find((o) => o.thickness === layerThicknessMm)?.description}
-          </p>
-        )}
       </div>
     </>
   );

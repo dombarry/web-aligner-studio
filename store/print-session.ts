@@ -33,6 +33,8 @@ interface PrintSessionState {
   supportTouchpoint: number;
   supportSlope: number;
   labelEnabled: boolean;
+  labelTextMode: "filename" | "patient" | "custom";
+  labelCustomText: string;
   labelFontSize: number;
   labelDepth: number;
   labelMode: "ENGRAVE" | "EMBOSS";
@@ -63,6 +65,8 @@ interface PrintSessionState {
   setSupportTouchpoint: (v: number) => void;
   setSupportSlope: (v: number) => void;
   setLabelEnabled: (v: boolean) => void;
+  setLabelTextMode: (v: "filename" | "patient" | "custom") => void;
+  setLabelCustomText: (v: string) => void;
   setLabelFontSize: (v: number) => void;
   setLabelDepth: (v: number) => void;
   setLabelMode: (v: "ENGRAVE" | "EMBOSS") => void;
@@ -84,6 +88,8 @@ const initialState = {
   supportTouchpoint: 1.00,
   supportSlope: 1.35,
   labelEnabled: true,
+  labelTextMode: "filename" as const,
+  labelCustomText: "",
   labelFontSize: 3.0,
   labelDepth: 0.5,
   labelMode: "ENGRAVE" as const,
@@ -115,6 +121,8 @@ export const usePrintSession = create<PrintSessionState>((set) => ({
   setSupportTouchpoint: (v) => set({ supportTouchpoint: v }),
   setSupportSlope: (v) => set({ supportSlope: v }),
   setLabelEnabled: (v) => set({ labelEnabled: v }),
+  setLabelTextMode: (v) => set({ labelTextMode: v }),
+  setLabelCustomText: (v) => set({ labelCustomText: v }),
   setLabelFontSize: (v) => set({ labelFontSize: v }),
   setLabelDepth: (v) => set({ labelDepth: v }),
   setLabelMode: (v) => set({ labelMode: v }),

@@ -7,7 +7,9 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
       <input
         ref={ref}
         className={clsx(
-          "w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary disabled:opacity-50",
+          "w-full rounded-xl border border-white/[0.06] bg-white/[0.03] px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all duration-200",
+          "focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 focus:bg-white/[0.05]",
+          "disabled:opacity-40 disabled:pointer-events-none",
           className
         )}
         {...props}

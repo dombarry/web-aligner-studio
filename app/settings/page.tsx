@@ -6,9 +6,11 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { useAppSettings } from "@/store/app-settings";
 import { Save } from "lucide-react";
 
 export default function SettingsPage() {
+  const { showVirtualPrinters, setShowVirtualPrinters } = useAppSettings();
   const [machineType, setMachineType] = useState("FORM-4-0");
   const [materialCode, setMaterialCode] = useState("FLDLCO11");
   const [layerThickness, setLayerThickness] = useState("0.1");
@@ -95,6 +97,24 @@ export default function SettingsPage() {
               <label className="text-sm font-medium mb-1 block">Depth (mm)</label>
               <Input value={labelDepth} onChange={(e) => setLabelDepth(e.target.value)} />
             </div>
+          </div>
+        </Card>
+
+        <Card>
+          <CardTitle>Development</CardTitle>
+          <div className="mt-4 space-y-3">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showVirtualPrinters}
+                onChange={(e) => setShowVirtualPrinters(e.target.checked)}
+                className="accent-primary w-4 h-4"
+              />
+              <div>
+                <p className="text-sm font-medium">Show virtual printers</p>
+                <p className="text-xs text-muted-foreground">Display virtual/simulated printers in the printer selection dropdown</p>
+              </div>
+            </label>
           </div>
         </Card>
 

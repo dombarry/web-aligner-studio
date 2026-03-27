@@ -131,10 +131,10 @@ export default function Dashboard() {
                 <Download className="w-4 h-4 text-primary" />
               </div>
               <div>
-                <h3 className="text-sm font-semibold mb-1">1. Download PreForm</h3>
+                <h3 className="text-sm font-semibold mb-1">1. Download PreForm Server</h3>
                 <p className="text-xs text-muted-foreground mb-2">
-                  Download and install the latest version of Formlabs PreForm software from the Formlabs website.
-                  PreForm includes the local API server needed for this application.
+                  Download the PreForm Server package from the Formlabs website.
+                  This is the headless server that provides the API for this application.
                 </p>
                 <p className="text-xs text-muted-foreground">
                   Visit <span className="font-mono text-foreground">formlabs.com/software/preform</span> to download.
@@ -149,16 +149,17 @@ export default function Dashboard() {
                 <Monitor className="w-4 h-4 text-primary" />
               </div>
               <div>
-                <h3 className="text-sm font-semibold mb-1">2. Enable the Local API Server</h3>
+                <h3 className="text-sm font-semibold mb-1">2. Start PreForm Server via CLI</h3>
                 <p className="text-xs text-muted-foreground mb-2">
-                  Open PreForm, then enable the local API server:
+                  Open a terminal, navigate to the directory containing PreFormServer.app, and run:
                 </p>
-                <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
-                  <li>Open PreForm &rarr; <span className="text-foreground">File</span> &rarr; <span className="text-foreground">Preferences</span></li>
-                  <li>Navigate to the <span className="text-foreground">Network</span> tab</li>
-                  <li>Enable <span className="text-foreground">&quot;PreForm Local API Server&quot;</span></li>
-                  <li>Ensure the port is set to <span className="font-mono text-foreground">44388</span></li>
-                </ol>
+                <code className="text-xs bg-secondary px-3 py-2 rounded font-mono block whitespace-pre-wrap">
+                  ./PreFormServer.app/Contents/MacOS/PreFormServer --port 44388
+                </code>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Keep this terminal window open while using Web Aligner Studio.
+                  The server must be running on port <span className="font-mono text-foreground">44388</span>.
+                </p>
               </div>
             </div>
           </Card>
@@ -178,7 +179,7 @@ export default function Dashboard() {
                   http://localhost:44388
                 </code>
                 <p className="text-xs text-muted-foreground mt-2">
-                  Make sure this application is running on the same machine as PreForm, or configure
+                  Make sure this application is running on the same machine as PreForm Server, or configure
                   the <span className="font-mono text-foreground">PREFORM_URL</span> environment variable.
                 </p>
               </div>
