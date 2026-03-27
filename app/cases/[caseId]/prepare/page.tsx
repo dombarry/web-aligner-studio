@@ -11,6 +11,7 @@ import { Progress } from "@/components/ui/Progress";
 import { STLViewer } from "@/components/viewer/STLViewer";
 import { ViewerToolbar } from "@/components/viewer/ViewerControls";
 import { usePrintSession } from "@/store/print-session";
+import { usePrinterMode } from "@/store/printer-mode";
 import { calculateLabelPose } from "@/lib/label-calc";
 import { MaterialSelector } from "@/components/prepare/MaterialSelector";
 import {
@@ -47,6 +48,9 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
   const [error, setError] = useState("");
 
   const store = usePrintSession();
+  const { getBuildPlate, getMachineTypes } = usePrinterMode();
+  const buildPlate = getBuildPlate();
+  const allowedMachineTypes = getMachineTypes();
 
   useEffect(() => {
     store.reset();
@@ -385,6 +389,7 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
           <STLViewer
             models={viewerModels}
             onModelClick={(id) => store.setSelectedModel(id)}
+            buildPlateSize={buildPlate}
             className="w-full h-full"
           />
           <ViewerToolbar className="absolute top-4 right-4" />
@@ -635,7 +640,17 @@ export default function PreparePage({ params }: { params: Promise<{ caseId: stri
                     }}
                   >
                     <option value="">Choose a printer...</option>
-                    {devices.map((d) => (
+                    {devices
+                      .filter((d) => {
+                        const name = (d.product_name || "").toLowerCase();
+                        // Form 4L family: name contains "4l" or "4bl"
+                        // Form 4 family: name contains "4" but not "4l" or "4bl"
+                        const isLarge = /4\s*l|4\s*bl/i.test(name);
+                        return allowedMachineTypes.some((mt) => mt.includes("4L") || mt.includes("4BL"))
+                          ? isLarge
+                          : !isLarge;
+                      })
+                      .map((d) => (
                       <option key={d.id} value={d.id}>
                         {d.product_name} ({d.status}) {d.is_connected ? "" : "- offline"}
                       </option>

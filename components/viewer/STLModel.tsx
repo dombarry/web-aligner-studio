@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useMemo } from "react";
+import { useRef, useState, useMemo, useEffect } from "react";
 import { useLoader } from "@react-three/fiber";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import * as THREE from "three";
@@ -13,6 +13,8 @@ interface STLModelProps {
   color?: string;
   selected?: boolean;
   onClick?: () => void;
+  autoScale?: boolean;
+  targetSize?: number;
 }
 
 export function STLModel({
@@ -23,23 +25,49 @@ export function STLModel({
   color = "#94a3b8",
   selected = false,
   onClick,
+  autoScale = true,
+  targetSize = 80,
 }: STLModelProps) {
   const meshRef = useRef<THREE.Mesh>(null);
   const [hovered, setHovered] = useState(false);
   const geometry = useLoader(STLLoader, url);
 
-  const centeredGeometry = useMemo(() => {
+  const { centeredGeometry, computedScale } = useMemo(() => {
     const geo = geometry.clone();
     geo.computeBoundingBox();
+    const bb = geo.boundingBox!;
     const center = new THREE.Vector3();
-    geo.boundingBox!.getCenter(center);
+    bb.getCenter(center);
     geo.translate(-center.x, -center.y, -center.z);
-    // Move so bottom sits at y=0
+
+    // Compute size to determine if auto-scaling is needed
+    const size = new THREE.Vector3();
+    bb.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z);
+
+    let autoScaleFactor = 1;
+    if (autoScale && maxDim > 0) {
+      // If model is very small (likely in meters) or very large, scale to target
+      if (maxDim < 1) {
+        // Model is likely in meters, convert to mm
+        autoScaleFactor = 1000;
+      } else if (maxDim > 500) {
+        // Model is too large, scale down to fit build plate
+        autoScaleFactor = targetSize / maxDim;
+      }
+    }
+
+    if (autoScaleFactor !== 1) {
+      geo.scale(autoScaleFactor, autoScaleFactor, autoScaleFactor);
+    }
+
+    // Recompute bounding box after scaling
     geo.computeBoundingBox();
     const minY = geo.boundingBox!.min.y;
     geo.translate(0, -minY, 0);
-    return geo;
-  }, [geometry]);
+
+    return { centeredGeometry: geo, computedScale: autoScaleFactor };
+  }, [geometry, autoScale, targetSize]);
 
   const displayColor = selected ? "#3b82f6" : hovered ? "#60a5fa" : color;
 

@@ -11,8 +11,9 @@ import {
   ClipboardList,
   Settings,
   Activity,
-  Stethoscope,
+  ChevronDown,
 } from "lucide-react";
+import { usePrinterMode, PRINTER_FAMILIES, type PrinterFamily } from "@/store/printer-mode";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -24,6 +25,8 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { printerFamily, setPrinterFamily, getBuildPlate } = usePrinterMode();
+  const buildPlate = getBuildPlate();
 
   return (
     <aside className="w-64 border-r border-border bg-card flex flex-col shrink-0">
@@ -37,6 +40,32 @@ export function Sidebar() {
             <p className="text-xs text-muted-foreground">Aligner Manufacturing</p>
           </div>
         </Link>
+      </div>
+
+      {/* Printer Family Selector */}
+      <div className="px-4 pt-4 pb-2">
+        <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
+          Printer Mode
+        </label>
+        <div className="relative">
+          <select
+            value={printerFamily}
+            onChange={(e) => setPrinterFamily(e.target.value as PrinterFamily)}
+            className="w-full appearance-none rounded-lg border border-border bg-secondary px-3 py-2 pr-8 text-sm font-medium text-foreground cursor-pointer hover:border-primary/30 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-colors"
+          >
+            {(Object.entries(PRINTER_FAMILIES) as [PrinterFamily, typeof PRINTER_FAMILIES[PrinterFamily]][]).map(
+              ([key, config]) => (
+                <option key={key} value={key}>
+                  {config.label}
+                </option>
+              )
+            )}
+          </select>
+          <ChevronDown className="w-4 h-4 text-muted-foreground absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-1">
+          Build plate: {buildPlate.x} x {buildPlate.y} mm
+        </p>
       </div>
 
       <nav className="flex-1 p-4 space-y-1">
